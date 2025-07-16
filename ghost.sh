@@ -44,7 +44,7 @@ echo "[+] Proxychains set to dynamic + Tor."
 ## 6. DNS Leak Protection
 echo -e "${GREEN}[6/10] Setting DNS to prevent leaks...${NC}"
 echo "nameserver 1.1.1.1" > /etc/resolv.conf
-chattr +i /etc/resolv.conf  # Lock the file to prevent overwrites
+chattr +i /etc/resolv.conf  
 echo "[+] DNS locked to Cloudflare (1.1.1.1)."
 
 ## 7. Clean Logs & History
