@@ -1,85 +1,227 @@
 #!/bin/bash
 
-# GHOSTIFY v1.0 - by IanNarito
-# Become a ghost. Stay hidden.
+# GHOSTIFY v2.0 - Enhanced Stealth Tool
+# Improvements: Safety checks, Backup/Restore, Safe Log Wiping, Robust Networking
+# Author: IanNarito (Refined by Gemini)
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
+# --- Colors ---
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[1;34m'
 NC='\033[0m'
 
-echo -e "${GREEN} Starting GHOST - Stealth Mode Initiated ${NC}"
+# --- Configuration ---
+BACKUP_DIR="/tmp/ghostify_backup"
+LOG_FILES=("/var/log/syslog" "/var/log/auth.log" "/var/log/kern.log" "/var/log/dmesg" "/var/log/wtmp" "/var/log/btmp")
 
-## 1. Randomize MAC Address
-echo -e "${GREEN}[1/10] Randomizing MAC address...${NC}"
-iface=$(ip link | awk -F: '$0 !~ "lo|vir|wl|docker" {print $2;getline}')
-macchanger -r "$iface" > /dev/null 2>&1
-echo "[+] MAC address randomized on $iface."
+# --- Banner ---
+banner() {
+    clear
+    echo -e "${BLUE}"
+    echo "   ________  __  ______  _____________  ________  __"
+    echo "  / ___/  / / / / __  / / ___/_  __/ /  _/ __ \/ /"
+    echo " / / __/ /_/ / / / / /  \__ \ / /    / // /_/ / / "
+    echo "/ /_/ / __  / / /_/ /  ___/ // /   _/ // ____/_/  "
+    echo "\____/_/ /_/  \____/  /____//_/   /___/_/   (_)   "
+    echo -e "${NC}"
+    echo -e "      ${YELLOW}:: v2.0 :: The Professional Stealth Suite ::${NC}\n"
+}
 
-## 2. Change Hostname
-echo -e "${GREEN}[2/10] Changing hostname...${NC}"
-NEW_HOST="ghost-$(shuf -i 1000-9999 -n 1)"
-hostnamectl set-hostname "$NEW_HOST"
-echo "[+] New hostname: $NEW_HOST"
-
-## 3. Disable IPv6
-echo -e "${GREEN}[3/10] Disabling IPv6...${NC}"
-echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
-echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
-sysctl -p > /dev/null 2>&1
-echo "[+] IPv6 disabled."
-
-## 4. Install Tor & Proxychains
-echo -e "${GREEN}[4/10] Installing Tor and Proxychains...${NC}"
-apt update -y > /dev/null && apt install -y tor proxychains4 > /dev/null
-echo "[+] Tor & Proxychains installed."
-
-## 5. Configure Proxychains
-echo -e "${GREEN}[5/10] Configuring Proxychains...${NC}"
-sed -i 's/^strict_chain/#strict_chain/' /etc/proxychains4.conf
-sed -i 's/^#dynamic_chain/dynamic_chain/' /etc/proxychains4.conf
-sed -i 's/^#proxy_dns/proxy_dns/' /etc/proxychains4.conf
-sed -i '$a socks5 127.0.0.1 9050' /etc/proxychains4.conf
-echo "[+] Proxychains set to dynamic + Tor."
-
-## 6. DNS Leak Protection
-echo -e "${GREEN}[6/10] Setting DNS to prevent leaks...${NC}"
-echo "nameserver 1.1.1.1" > /etc/resolv.conf
-chattr +i /etc/resolv.conf  
-echo "[+] DNS locked to Cloudflare (1.1.1.1)."
-
-## 7. Clean Logs & History
-echo -e "${GREEN}[7/10] Wiping bash history & logs...${NC}"
-history -c && rm -f ~/.bash_history
-find /var/log -type f -exec shred -u {} \; > /dev/null 2>&1
-echo "[+] Logs and history nuked."
-
-## 8. Launch Tor
-echo -e "${GREEN}[8/10] Starting Tor service...${NC}"
-systemctl start tor
-sleep 3
-
-## 9. Stealth Level Checker
-echo -e "${GREEN}[9/10] Analyzing stealth level...${NC}"
-score=0
-
-## Score Components
-[[ "$(curl -s ifconfig.me)" ]] && ((score+=20))
-[[ "$(curl -s ifconfig.me | grep -q 127.0.0.1)" ]] || ((score+=10))
-[[ "$(pgrep tor)" ]] && ((score+=20))
-[[ "$(grep '9050' /etc/proxychains4.conf)" ]] && ((score+=20))
-[[ "$NEW_HOST" == *"ghost"* ]] && ((score+=10))
-[[ -z "$(history)" ]] && ((score+=10))
-[[ "$(ip a | grep ether | awk '{print $2}' | grep -oE '^..:..')" != "00:00" ]] && ((score+=10))
-
-echo "[*] Stealth Score: $score / 100"
-
-if [ $score -ge 90 ]; then
-    echo -e "${GREEN} Stealth Level: GHOST MODE ACTIVATED ${NC}"
-elif [ $score -ge 70 ]; then
-    echo -e "${GREEN} Stealth Level: Solid, but tighten up...${NC}"
-else
-    echo -e "${RED} Stealth Level: Weak — you're trackable, fam!${NC}"
+# --- Root Check ---
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${RED}[!] This script must be run as root.${NC}" 
+   exit 1
 fi
 
-echo -e "${GREEN}[10/10] Ghostify complete. Use proxychains or torsocks to stay hidden.${NC}"
-echo -e "${GREEN} Stay hidden soldier. ${NC}"
+# --- Functions ---
+
+check_deps() {
+    echo -e "${BLUE}[*] Checking dependencies...${NC}"
+    local deps=("macchanger" "tor" "proxychains4" "curl" "shred")
+    for pkg in "${deps[@]}"; do
+        if ! command -v "$pkg" &> /dev/null; then
+            echo -e "${YELLOW}[!] Installing missing package: $pkg...${NC}"
+            apt-get update -y > /dev/null && apt-get install -y "$pkg" > /dev/null
+        fi
+    done
+    echo -e "${GREEN}[+] Dependencies met.${NC}"
+}
+
+backup_configs() {
+    echo -e "${BLUE}[*] Backing up original configurations...${NC}"
+    mkdir -p "$BACKUP_DIR"
+    
+    # Backup Hostname
+    cat /etc/hostname > "$BACKUP_DIR/hostname"
+    
+    # Backup DNS
+    if [ -f /etc/resolv.conf ]; then
+        cp /etc/resolv.conf "$BACKUP_DIR/resolv.conf"
+    fi
+
+    # Backup Proxychains
+    cp /etc/proxychains4.conf "$BACKUP_DIR/proxychains4.conf"
+    
+    echo -e "${GREEN}[+] Backup saved to $BACKUP_DIR.${NC}"
+}
+
+randomize_identity() {
+    echo -e "${BLUE}[*] Randomizing Identity...${NC}"
+    
+    # 1. MAC Address
+    # Interactive Interface Selection for safety
+    echo -e "${YELLOW}Available Interfaces:${NC}"
+    ip -o link show | awk -F': ' '{print $2}' | grep -v "lo"
+    read -p "Enter interface to mask (e.g., eth0, wlan0): " IFACE
+    
+    if [[ -z "$IFACE" ]]; then
+        IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+        echo -e "${YELLOW}[!] No input. Defaulting to active interface: $IFACE${NC}"
+    fi
+
+    ip link set "$IFACE" down
+    macchanger -r "$IFACE" > /dev/null
+    ip link set "$IFACE" up
+    echo -e "${GREEN}[+] MAC Address on $IFACE randomized.${NC}"
+
+    # 2. Hostname
+    OLD_HOST=$(cat /etc/hostname)
+    NEW_HOST="node-$(shuf -i 10000-99999 -n 1)"
+    hostnamectl set-hostname "$NEW_HOST"
+    sed -i "s/$OLD_HOST/$NEW_HOST/g" /etc/hosts
+    echo -e "${GREEN}[+] Hostname changed to: $NEW_HOST${NC}"
+}
+
+secure_network() {
+    echo -e "${BLUE}[*] Securing Network Layer...${NC}"
+
+    # 3. Disable IPv6
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1 > /dev/null
+    echo -e "${GREEN}[+] IPv6 Disabled.${NC}"
+
+    # 4. DNS Leaks
+    # Remove immutable bit if exists, then overwrite
+    chattr -i /etc/resolv.conf 2>/dev/null
+    echo "nameserver 1.1.1.1" > /etc/resolv.conf
+    # Make immutable to prevent DHCP overwrites
+    chattr +i /etc/resolv.conf
+    echo -e "${GREEN}[+] DNS locked to 1.1.1.1 (Cloudflare).${NC}"
+}
+
+setup_tor() {
+    echo -e "${BLUE}[*] Configuring Tor & Proxychains...${NC}"
+    
+    # Start Tor
+    systemctl restart tor
+    
+    # Configure Proxychains (Idempotent - checks before adding)
+    CONF="/etc/proxychains4.conf"
+    sed -i 's/^strict_chain/#strict_chain/' "$CONF"
+    sed -i 's/^#dynamic_chain/dynamic_chain/' "$CONF"
+    sed -i 's/^#proxy_dns/proxy_dns/' "$CONF"
+    
+    if ! grep -q "socks5 127.0.0.1 9050" "$CONF"; then
+        echo "socks5 127.0.0.1 9050" >> "$CONF"
+    fi
+    
+    echo -e "${GREEN}[+] Tor is running and Proxychains configured.${NC}"
+}
+
+nuke_logs() {
+    echo -e "${BLUE}[*] Wiping Logs (Safe Mode)...${NC}"
+    
+    # Clear Bash History
+    history -c
+    rm -f ~/.bash_history
+    
+    # Safe Log Wiping (Truncate don't delete)
+    for log in "${LOG_FILES[@]}"; do
+        if [ -f "$log" ]; then
+            shred -n 1 "$log" 2>/dev/null # Overwrite once
+            > "$log" # Truncate to 0 bytes
+        fi
+    done
+    
+    echo -e "${GREEN}[+] Logs scrubbed without breaking system services.${NC}"
+}
+
+check_stealth() {
+    echo -e "${BLUE}[*] Verifying Stealth Status...${NC}"
+    sleep 2
+    
+    echo -n "Checking Real IP: "
+    curl -s --connect-timeout 3 ifconfig.me || echo "Offline"
+    
+    echo -n "Checking Tor IP (via Proxychains): "
+    TOR_IP=$(proxychains4 -q curl -s --connect-timeout 5 ifconfig.me)
+    echo "$TOR_IP"
+
+    if [[ -z "$TOR_IP" ]]; then
+        echo -e "${RED}[!] Tor connection failed! Check service.${NC}"
+    else
+        echo -e "${GREEN}[+] Tor Tunnel Active.${NC}"
+    fi
+}
+
+restore_system() {
+    echo -e "${RED}[!] RESTORING SYSTEM TO NORMAL STATE...${NC}"
+    
+    if [ -d "$BACKUP_DIR" ]; then
+        # Restore Hostname
+        OLD_NAME=$(cat "$BACKUP_DIR/hostname")
+        hostnamectl set-hostname "$OLD_NAME"
+        echo "[+] Hostname restored."
+        
+        # Restore DNS
+        chattr -i /etc/resolv.conf
+        cp "$BACKUP_DIR/resolv.conf" /etc/resolv.conf
+        echo "[+] DNS restored."
+
+        # Restore Proxychains
+        cp "$BACKUP_DIR/proxychains4.conf" /etc/proxychains4.conf
+        echo "[+] Proxychains config restored."
+        
+        # Enable IPv6
+        sysctl -w net.ipv6.conf.all.disable_ipv6=0 > /dev/null
+        sysctl -w net.ipv6.conf.default.disable_ipv6=0 > /dev/null
+        echo "[+] IPv6 re-enabled."
+
+        # Restore MAC (Attempt to reset to permanent)
+        echo -e "${YELLOW}Note: MAC address will reset to hardware default on reboot.${NC}"
+        
+        rm -rf "$BACKUP_DIR"
+        echo -e "${GREEN}[+] System restored. Reboot recommended.${NC}"
+    else
+        echo -e "${RED}[!] No backup found! Cannot restore automatically.${NC}"
+    fi
+}
+
+# --- Main Logic ---
+banner
+
+echo "Select Mode:"
+echo "1) GHOST MODE (Activate Stealth)"
+echo "2) RESTORE (Revert Changes)"
+read -p "Choice [1/2]: " CHOICE
+
+case $CHOICE in
+    1)
+        check_deps
+        backup_configs
+        randomize_identity
+        secure_network
+        setup_tor
+        nuke_logs
+        check_stealth
+        echo -e "\n${GREEN}=== GHOSTIFY COMPLETE ===${NC}"
+        echo "Use: proxychains4 <command>"
+        ;;
+    2)
+        restore_system
+        ;;
+    *)
+        echo "Invalid choice."
+        ;;
+esac
