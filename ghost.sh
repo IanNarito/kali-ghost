@@ -2,7 +2,7 @@
 
 # GHOSTIFY v2.0 - Enhanced Stealth Tool
 # Improvements: Safety checks, Backup/Restore, Safe Log Wiping, Robust Networking
-# Author: IanNarito (Refined by Gemini)
+# Author: IanNarito 
 
 # --- Colors ---
 RED='\033[1;31m'
